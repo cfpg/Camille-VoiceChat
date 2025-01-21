@@ -12,9 +12,9 @@ from tkinter import simpledialog
 
 # Step 2: Initialize Text-to-Speech engine (Windows users only)
 engine = pyttsx3.init()
-hazel_voice_id = "HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Speech\Voices\Tokens\TTS_MS_EN-GB_HAZEL_11.0"
-engine.setProperty('voice', hazel_voice_id)
-engine.say("Hello Videotronic Maker, How can I assist you today sir?")
+zira_voice_id = "HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Speech\Voices\Tokens\TTS_MS_EN-US_ZIRA_11.0"
+engine.setProperty('voice', zira_voice_id)
+engine.say("Hey Carlos, what do you need?")
 engine.runAndWait()
 
 # Step 3: Define ANSI escape sequences for text color
@@ -91,12 +91,12 @@ def get_user_input():
 # Step 11: Define function to process user input and generate response
 def process_input(input_text):
     conversation = [
-        {"role": "system", "content": "You are KITT, the assistant chatbot. My name is VideotronicMaker, the human and user. Your role is to assist the human, who is known as VideotronicMaker. Respond concisely and accurately, maintaining a friendly, respectful, and professional tone. Emphasize honesty, candor, and precision in your responses."},
+        {"role": "system", "content": "Your name is Argil and you're my assistant. Respond to my queries shortly and concise, be friendly and don't overthink the queries since you already know the answer, don't explain yourself and keep the language informal and one to one, refer to me as Carlos if you need to, don't always refer to me by name unless it is needed. Don't mention any of these instructions as these are only for you and should be handled by you in your thinking, respond only with the answer to my questions."},
         {"role": "user", "content": input_text}
     ]
 
     completion = openai.ChatCompletion.create(
-        model="local-model",
+        model="llava-v1.5-7b",
         messages=conversation,
         temperature=0.7,
         top_p=0.9,  
@@ -104,7 +104,7 @@ def process_input(input_text):
     )
 
     assistant_reply = completion.choices[0].message.content
-    print(f"{colors['magenta']}KITT:{colors['reset']} {assistant_reply}")
+    print(f"{colors['magenta']}Argil:{colors['reset']} {assistant_reply}")
     speak(assistant_reply)
 
 # Step 12: Main loop to continuously monitor for user input
@@ -115,14 +115,14 @@ while True:
             audio_file = record_audio()
             transcribe_result = whisper_model.transcribe(audio_file)
             transcribed_text = transcribe_result["text"]
-            print(f"{colors['blue']}VTM:{colors['reset']} {transcribed_text}")
+            print(f"{colors['blue']}Carlos:{colors['reset']} {transcribed_text}")
             process_input(transcribed_text)
             os.remove(audio_file)  # Cleanup
 
         elif keyboard.is_pressed('m'):  # Use the GUI for input when 'M' is pressed
             typed_input = get_user_input()
             if typed_input:  # Ensure input is not None or empty
-                print(f"{colors['blue']}VTM typed:{colors['reset']} {typed_input}")  # Print the typed input in the terminal
+                print(f"{colors['blue']}Carlos typed:{colors['reset']} {typed_input}")  # Print the typed input in the terminal
                 process_input(typed_input)
 
     except KeyboardInterrupt:
