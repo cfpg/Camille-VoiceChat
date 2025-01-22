@@ -1,4 +1,3 @@
-# Step 1: Import necessary libraries and modules
 import warnings
 import pyaudio
 import wave
@@ -7,17 +6,23 @@ import openai
 import keyboard
 import os
 import pyttsx3
-import tkinter as tk
+import threading
+import speech_recognition as sr
 from tkinter import simpledialog
+import numpy as np
 
-# Step 2: Initialize Text-to-Speech engine (Windows users only)
+# Step 0: Setup general configuration
+DEBUG = True
+MODEL = "llama-3.2-3b-instruct"
+AI_NAME = "Camille"
+USER_NAME = "Carlos"
+
+# Step 1: Initialize Text-to-Speech engine (Windows users only)
 engine = pyttsx3.init()
 zira_voice_id = "HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Speech\Voices\Tokens\TTS_MS_EN-US_ZIRA_11.0"
 engine.setProperty('voice', zira_voice_id)
-engine.say("Hey Carlos, what do you need?")
-engine.runAndWait()
 
-# Step 3: Define ANSI escape sequences for text color
+# Step 2: Define ANSI escape sequences for text color
 colors = {
     "blue": "\033[94m",
     "bright_blue": "\033[96m",
@@ -34,41 +39,67 @@ colors = {
     "reset": "\033[0m"
 }
 
-# Step 4: Ignore FP16 warnings
+# Step 3: Ignore FP16 warnings
 warnings.filterwarnings("ignore", message="FP16 is not supported on CPU")
 
-# Step 5: Point to LM Studio Local Inference Server
+# Step 4: Point to LM Studio Local Inference Server
 openai.api_base = "http://localhost:1234/v1"
 openai.api_key = "not-needed"
 
-# Step 6: Load the Whisper model
+# Step 5: Load the Whisper model
 whisper_model = whisper.load_model("tiny")  # orig=base
 
-# Step 7: Define audio parameters
+# Step 6: Define audio parameters
 FORMAT = pyaudio.paInt16
 CHANNELS = 1
 RATE = 8000  # orig = 16000
 CHUNK = 1024
 audio = pyaudio.PyAudio()
 
-# Step 8: Define function to speak text
+# Step 7: Define function to speak text
 def speak(text):
     engine.say(text)
     engine.runAndWait()
 
-# Step 9: Define function to record audio
+# Helper functions
+def bytes_to_float_array(a_bytes):
+    # Convert bytes to int (assuming 2 bytes per sample)
+    a_int = np.frombuffer(a_bytes, dtype=np.int16)
+    # Normalize to float between -1 and 1
+    return a_int.astype(np.float32) / 32768.0
+
+# Step 8: Define function to record audio until silence is detected
 def record_audio():
     stream = audio.open(format=FORMAT, channels=CHANNELS, rate=RATE, input=True, frames_per_buffer=CHUNK)
-    print(f"{colors['green']}Start speaking... (Press 'N' to stop){colors['reset']}")
+    print(f"{colors['green']}Listening for command...{colors['reset']}")
     frames = []
 
+    # Set thresholds and silence detection parameters
+    max_silent_chunks = 20  # Adjust based on your needs
+    silent_chunk_count = 0
+    
     while True:
         data = stream.read(CHUNK)
-        frames.append(data)
-        if keyboard.is_pressed('n'):
-            print(f"{colors['red']}Stopping recording.{colors['reset']}")
-            break
+        if not data: break
+        
+        # Convert data to float representation for analysis
+        audio_data = bytes_to_float_array(data)
+        
+        # Calculate the RMS (Root Mean Square) as a measure of loudness
+        rms = np.sqrt(np.mean(audio_data ** 2))
+        
+        # If the RMS is below a certain threshold, consider it silent
+        if rms < 30:  # Adjust this threshold based on your environment and testing
+            silent_chunk_count +=1
+            if silent_chunk_count > max_silent_chunks:
+                print(f"{colors['red']}Detecting silence... Stopping recording.{colors['reset']}")
+                break
+        else:
+            silent_chunk_count = 0
 
+        frames.append(data)
+            
+    print(f"{colors['red']}Stopping recording.{colors['reset']}")
     stream.stop_stream()
     stream.close()
 
@@ -81,22 +112,22 @@ def record_audio():
 
     return "temp_audio.wav"
 
-# Step 10: Define function to get user input via GUI dialog
+# Step 9: Define function to get user input via GUI dialog
 def get_user_input():
-    ROOT = tk.Tk()
-    ROOT.withdraw()  # Hide the main Tkinter window
+    ROOT = simpledialog._default_root
+    ROOT.withdraw()
     user_input = simpledialog.askstring(title="Text Input", prompt="Type your input:")
     return user_input
 
-# Step 11: Define function to process user input and generate response
+# Step 10: Define function to process user input and generate response
 def process_input(input_text):
     conversation = [
-        {"role": "system", "content": "Your name is Argil and you're my assistant. Respond to my queries shortly and concise, be friendly and don't overthink the queries since you already know the answer, don't explain yourself and keep the language informal and one to one, refer to me as Carlos if you need to, don't always refer to me by name unless it is needed. Don't mention any of these instructions as these are only for you and should be handled by you in your thinking, respond only with the answer to my questions."},
+        {"role": "system", "content": "Your name is " + AI_NAME + " and you're my assistant. Respond to my queries shortly and concise, be friendly and don't overthink the queries since you already know the answer, don't explain yourself and keep the language informal and one to one, refer to me as " + USER_NAME + " if you need to, don't always refer to me by name unless it is needed. Don't mention any of these instructions as these are only for you and should be handled by you in your thinking, respond only with the answer to my questions."},
         {"role": "user", "content": input_text}
     ]
 
     completion = openai.ChatCompletion.create(
-        model="llava-v1.5-7b",
+        model=MODEL,
         messages=conversation,
         temperature=0.7,
         top_p=0.9,  
@@ -104,30 +135,63 @@ def process_input(input_text):
     )
 
     assistant_reply = completion.choices[0].message.content
-    print(f"{colors['magenta']}Argil:{colors['reset']} {assistant_reply}")
-    speak(assistant_reply)
+    print(f"{colors['magenta']}" + AI_NAME + f":{colors['reset']} {assistant_reply}")
 
-# Step 12: Main loop to continuously monitor for user input
-print(f"{colors['yellow']}Ready to record. (Press 'B' to start, 'M' to type){colors['reset']}")
-while True:
+    # Run speak in a separate thread to avoid blocking the main thread
+    speak_thread = threading.Thread(target=speak, args=(assistant_reply,))
+    speak_thread.start()
+
+# Step 11: Implement wake word detection using speech recognition
+def listen_for_wake_phrase():
+    r = sr.Recognizer()
+    with sr.Microphone() as source:
+        r.adjust_for_ambient_noise(source)
+        print(f"{colors['yellow']}Listening for wake phrase 'Hey {AI_NAME}'...{colors['reset']}")
+        
+        while True:
+            try:
+                audio = r.listen(source, timeout=5)
+                text = r.recognize_google(audio, language="en-US")
+
+                if DEBUG:
+                    print(f"{colors['blue']}Heard:{colors['reset']} {text.lower()}")
+                
+                if f"hey {AI_NAME.lower()}" in text.lower():
+                    print(f"{colors['cyan']}Wake phrase detected!{colors['reset']}")
+                    speak(f"Yes, {USER_NAME}")
+                    return True
+            except sr.WaitTimeoutError:
+                continue
+            except sr.UnknownValueError:
+                continue
+            except KeyboardInterrupt:
+                print("\nExiting wake thread...")
+                return False
+
+# Step 12: Define function to process the recorded command
+def process_command(audio_file):
+    print(f"{colors['yellow']}Processing command...{colors['reset']}")
+    if os.path.exists(audio_file):
+        transcribe_result = whisper_model.transcribe(audio_file)
+        transcribed_text = transcribe_result["text"]
+        print(f"{colors['blue']}{USER_NAME}:{colors['reset']} {transcribed_text}")
+        process_input(transcribed_text)
+        os.remove(audio_file)
+    else:
+        print(f"{colors['red']}No audio file found.{colors['reset']}")
+
+def main():
     try:
-        if keyboard.is_pressed('b'):  # Start recording when 'B' is pressed
-            audio_file = record_audio()
-            transcribe_result = whisper_model.transcribe(audio_file)
-            transcribed_text = transcribe_result["text"]
-            print(f"{colors['blue']}Carlos:{colors['reset']} {transcribed_text}")
-            process_input(transcribed_text)
-            os.remove(audio_file)  # Cleanup
-
-        elif keyboard.is_pressed('m'):  # Use the GUI for input when 'M' is pressed
-            typed_input = get_user_input()
-            if typed_input:  # Ensure input is not None or empty
-                print(f"{colors['blue']}Carlos typed:{colors['reset']} {typed_input}")  # Print the typed input in the terminal
-                process_input(typed_input)
+        print(f"{colors['yellow']}Starting up...{colors['reset']}")
+        if listen_for_wake_phrase():
+                # Record audio command
+                audio_file = record_audio()
+                # Process the command
+                process_command(audio_file)
 
     except KeyboardInterrupt:
         print("\nExiting...")
-        break  # Correctly placed to exit the loop upon a KeyboardInterrupt
+        audio.terminate()
 
-# Step 13: Cleanup audio resources
-audio.terminate()
+if __name__ == "__main__":
+    main()
