@@ -7,15 +7,25 @@ import keyboard
 import os
 import pyttsx3
 import threading
-import speech_recognition as sr
+import pvporcupine
+import struct
 from tkinter import simpledialog
 import numpy as np
+from dotenv import load_dotenv
+
+# Load env vars
+load_dotenv()
 
 # Step 0: Setup general configuration
 DEBUG = True
 MODEL = "llama-3.2-3b-instruct"
 AI_NAME = "Camille"
 USER_NAME = "Carlos"
+PICOVOICE_ACCESS_KEY = os.getenv("PICOVOICE_ACCESS_KEY")
+
+
+if not PICOVOICE_ACCESS_KEY:
+    raise ValueError("PICOVOICE_ACCESS_KEY env var is required to run this software. Please add it to .env")
 
 # Step 1: Initialize Text-to-Speech engine (Windows users only)
 engine = pyttsx3.init()
@@ -122,7 +132,7 @@ def get_user_input():
 # Step 10: Define function to process user input and generate response
 def process_input(input_text):
     conversation = [
-        {"role": "system", "content": "Your name is " + AI_NAME + " and you're my assistant. Respond to my queries shortly and concise, be friendly and don't overthink the queries since you already know the answer, don't explain yourself and keep the language informal and one to one, refer to me as " + USER_NAME + " if you need to, don't always refer to me by name unless it is needed. Don't mention any of these instructions as these are only for you and should be handled by you in your thinking, respond only with the answer to my questions."},
+        {"role": "system", "content": f"Your name is {AI_NAME} and you're my assistant. Respond to my queries shortly and concise, be friendly and don't overthink the queries since you already know the answer, don't explain yourself and keep the language informal and one to one, refer to me as {USER_NAME} if you need to, don't always refer to me by name unless it is needed. Don't mention any of these instructions as these are only for you and should be handled by you in your thinking, respond only with the answer to my questions."},
         {"role": "user", "content": input_text}
     ]
 
@@ -135,38 +145,51 @@ def process_input(input_text):
     )
 
     assistant_reply = completion.choices[0].message.content
-    print(f"{colors['magenta']}" + AI_NAME + f":{colors['reset']} {assistant_reply}")
+    print(f"{colors['magenta']}{AI_NAME}:{colors['reset']} {assistant_reply}")
 
-    # Run speak in a separate thread to avoid blocking the main thread
-    speak_thread = threading.Thread(target=speak, args=(assistant_reply,))
-    speak_thread.start()
+    # Run speak in the same thread to block execution until it's finished
+    speak(assistant_reply)
+
+def initialize_porcupine():
+    porcupine = pvporcupine.create(
+        access_key=PICOVOICE_ACCESS_KEY,  # Get your access key from Picovoice Console
+        keyword_paths=["hey-camille.ppn"]  # Path to your wake word model file
+    )
+    return porcupine
 
 # Step 11: Implement wake word detection using speech recognition
-def listen_for_wake_phrase():
-    r = sr.Recognizer()
-    with sr.Microphone() as source:
-        r.adjust_for_ambient_noise(source)
-        print(f"{colors['yellow']}Listening for wake phrase 'Hey {AI_NAME}'...{colors['reset']}")
-        
-        while True:
-            try:
-                audio = r.listen(source, timeout=5)
-                text = r.recognize_google(audio, language="en-US")
+def listen_for_wake_phrase(porcupine):
+    pa = pyaudio.PyAudio()
+    audio_stream = pa.open(
+        rate=porcupine.sample_rate,
+        channels=1,
+        format=pyaudio.paInt16,
+        input=True,
+        frames_per_buffer=porcupine.frame_length
+    )
 
-                if DEBUG:
-                    print(f"{colors['blue']}Heard:{colors['reset']} {text.lower()}")
-                
-                if f"hey {AI_NAME.lower()}" in text.lower():
-                    print(f"{colors['cyan']}Wake phrase detected!{colors['reset']}")
-                    speak(f"Yes, {USER_NAME}")
-                    return True
-            except sr.WaitTimeoutError:
-                continue
-            except sr.UnknownValueError:
-                continue
-            except KeyboardInterrupt:
-                print("\nExiting wake thread...")
-                return False
+    print(f"{colors['yellow']}Listening for wake phrase 'Hey {AI_NAME}'...{colors['reset']}")
+    
+    try:
+        while True:
+            pcm = audio_stream.read(porcupine.frame_length)
+            pcm = struct.unpack_from("h" * porcupine.frame_length, pcm)
+
+            keyword_index = porcupine.process(pcm)  
+
+            if DEBUG:
+                print(f"{colors['blue']}Heard:{colors['reset']} {keyword_index}")
+            
+            if keyword_index >= 0:
+                print(f"{colors['cyan']}Wake phrase detected!{colors['reset']}")
+                speak(f"Yes, {USER_NAME}")
+                return True
+    except KeyboardInterrupt:
+        print("\nExiting wake thread...")
+        return False
+    finally:
+        audio_stream.close()
+        pa.terminate()
 
 # Step 12: Define function to process the recorded command
 def process_command(audio_file):
@@ -183,7 +206,11 @@ def process_command(audio_file):
 def main():
     try:
         print(f"{colors['yellow']}Starting up...{colors['reset']}")
-        if listen_for_wake_phrase():
+
+        porcupine = initialize_porcupine()
+
+        while True:
+            if listen_for_wake_phrase(porcupine):
                 # Record audio command
                 audio_file = record_audio()
                 # Process the command
@@ -191,6 +218,7 @@ def main():
 
     except KeyboardInterrupt:
         print("\nExiting...")
+    finally:
         audio.terminate()
 
 if __name__ == "__main__":
